@@ -1,0 +1,64 @@
+Claude Code
+repo
+git commit
+push
+branch
+merge conflict
+pull request
+rebase
+CI pipeline
+deploy
+build
+refactor
+async
+await
+API endpoint
+JSON
+YAML
+regex
+PowerShell
+Python
+TypeScript
+C#
+.NET
+NuGet
+npm
+venv
+Docker
+Kubernetes
+SQL query
+database migration
+unit test
+E2E test
+debugger
+breakpoint
+stack trace
+null reference
+exception
+middleware
+frontend
+backend
+localhost
+environment variable
+config file
+Jira issue
+code review
+linter
+IntelliSense
+Visual Studio
+VS Code
+terminal
+CLI
+stdout
+stderr
+token
+prompt
+LLM
+GPU
+VRAM
+latency
+whisper
+transcribe
+Jira
+Confluence
+Multitenancy

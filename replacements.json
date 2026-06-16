@@ -1,0 +1,13 @@
+{
+  "_comment": "utterance: whole spoken sentence (lowercased, punctuation stripped) must equal key -> replaced by value. phrase: replaced anywhere in text, case-insensitive.",
+  "utterance": {
+    "clear chat": "/clear",
+    "clear set": "/clear",
+    "slash clear": "/clear",
+    "exit chat": "/exit",
+    "exit shot": "/exit",
+    "exit shut": "/exit",
+    "slash exit": "/exit"
+  },
+  "phrase": {}
+}

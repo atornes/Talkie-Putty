@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Models & archives (large, fetched separately)
+*.tar.bz2
+*.tar.gz
+*.onnx
+kokoro-int8-multi-lang-v1_1/
+sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/
+sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/
+sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-streaming-240ms/
+sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/
+vits-piper-en_US-libritts_r-medium/
+
+# Audio samples
+*.wav
+
+# Local settings
+gui_settings.json
+.claude/settings.local.json
