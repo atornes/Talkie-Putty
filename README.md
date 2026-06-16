@@ -27,7 +27,7 @@ The main app is **[`live_mic_gui3.py`](live_mic_gui3.py)**. Other `live_mic_*`,
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install numpy sounddevice keyboard sherpa-onnx faster-whisper
+pip install -r requirements.txt
 ```
 
 GPU Whisper needs CUDA runtime DLLs. The app auto-adds `nvidia/*` packages from the
