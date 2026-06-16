@@ -1018,6 +1018,70 @@ def open_replacements_editor():
     spoken.focus_set()
 
 
+HELP_TEXT = """\
+Talkie-Putty turns speech into text and pastes it into terminals.
+
+Speak and your words appear live in this always-on-top window.
+Pick the recognition model from the dropdown (top-right).
+
+HOTKEYS  (the dedicated keys, not the numpad ones)
+
+  Insert  — another window focused
+      Cut everything dictated here and paste it (Ctrl+V) into that window.
+      Insert is captured system-wide, so it never types a literal Insert.
+
+  Insert  — this window focused
+      Cut the text, switch back to the last window you used, and paste there.
+
+  Delete  — a terminal focused
+      Clear the dictation buffer. (Everywhere else, Delete works as normal.)
+
+  Home  (double-tap)
+      Read the clipboard aloud (text-to-speech).
+      Double-tap again while it is speaking to stop.
+
+PAUSES
+  A short pause inserts a space; a longer pause (~2.5 s) starts a new line.
+
+CUSTOMISE
+  Vocabulary…    bias recognition toward your own terms (Whisper models).
+  Replacements…  map spoken phrases to text or commands (e.g. "clear chat" -> /clear).
+"""
+
+
+def open_help_dialog():
+    c = THEMES[dark_mode]
+    dlg = tk.Toplevel(root)
+    dlg.title("Talkie-Putty — help")
+    dlg.transient(root)
+    x = root.winfo_x() + root.winfo_width() + 8
+    y = root.winfo_y()
+    dlg.geometry(f"520x560+{x}+{y}")
+    dlg.configure(bg=c["bg"])
+
+    txt = tk.Text(dlg, bg=c["box_bg"], fg=c["box_fg"], relief="flat",
+                  wrap="word", font=("Segoe UI", 10), padx=12, pady=10,
+                  insertbackground=c["caret"])
+    txt.insert("1.0", HELP_TEXT + f"\nVersion {CURRENT_VERSION}\n")
+    txt.configure(state="disabled")
+    txt.pack(fill="both", expand=True, padx=8, pady=8)
+
+    bar = tk.Frame(dlg, bg=c["bg"])
+    bar.pack(fill="x", padx=8, pady=(0, 8))
+    tk.Button(bar, text="Close", command=dlg.destroy,
+              bg=c["btn_bg"], fg=c["btn_fg"], activebackground=c["btn_active"],
+              activeforeground=c["fg"], relief="flat" if dark_mode else "raised",
+              bd=1).pack(side="right")
+
+    dlg.update_idletasks()
+    try:
+        val = ctypes.c_int(1 if dark_mode else 0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            user32.GetParent(dlg.winfo_id()), 20, ctypes.byref(val), 4)
+    except Exception:
+        pass
+
+
 btn_cut = tk.Button(btns, text="Cut all to clipboard", command=cut_all)
 btn_cut.pack(side="left")
 btn_clear = tk.Button(btns, text="Clear", command=clear_all)
@@ -1073,7 +1137,9 @@ speed_label = tk.Label(btns, text="Speed:")
 speed_label.pack(side="right", padx=(0, 2))
 theme_btn = tk.Button(top, width=3, command=lambda: toggle_theme())
 theme_btn.pack(side="right", padx=(0, 6))
-theme_buttons = [btn_cut, btn_clear, btn_last, btn_vocab, btn_repl, theme_btn]
+btn_help = tk.Button(top, text="?", width=3, command=open_help_dialog)
+btn_help.pack(side="right", padx=(0, 6))
+theme_buttons = [btn_cut, btn_clear, btn_last, btn_vocab, btn_repl, btn_help, theme_btn]
 
 displayed_final_utt = -1
 ignore_before_utt = 0      # whisper results for utterances below this are stale
