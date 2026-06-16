@@ -25,11 +25,47 @@ import threading
 import time
 from ctypes import wintypes
 
+import shutil
+import sys
+
 APP_DIR = pathlib.Path(__file__).parent
-VENV_NVIDIA = APP_DIR / ".venv" / "Lib" / "site-packages" / "nvidia"
-_dll_dirs = [str(d) for d in VENV_NVIDIA.rglob("*")
-             if d.is_dir() and any(f.suffix == ".dll" for f in d.iterdir() if f.is_file())]
-os.environ["PATH"] = os.pathsep.join(_dll_dirs) + os.pathsep + os.environ["PATH"]
+RES_DIR = pathlib.Path(getattr(sys, "_MEIPASS", APP_DIR))  # bundled read-only resources
+FROZEN = getattr(sys, "frozen", False)
+# When installed (frozen) models/config/settings live in a writable per-user dir;
+# in a dev checkout they sit next to the script.
+if FROZEN:
+    DATA_DIR = pathlib.Path(os.environ.get("LOCALAPPDATA", str(APP_DIR))) / "Talkie-Putty"
+else:
+    DATA_DIR = APP_DIR
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# Seed editable default configs into the data dir on first frozen run.
+for _cfg in ("prompt.txt", "replacements.json"):
+    _dst, _src = DATA_DIR / _cfg, RES_DIR / _cfg
+    if FROZEN and not _dst.exists() and _src.exists():
+        shutil.copyfile(_src, _dst)
+
+
+def add_cuda_to_path():
+    """Put CUDA runtime DLLs on the search path: the venv's nvidia packages in a
+    dev checkout, or the downloaded DATA_DIR/cuda folder when frozen."""
+    root_dir = (DATA_DIR / "cuda") if FROZEN else (APP_DIR / ".venv" / "Lib"
+                / "site-packages" / "nvidia")
+    if not root_dir.exists():
+        return False
+    dll_dirs = [str(d) for d in [root_dir, *root_dir.rglob("*")]
+                if d.is_dir() and any(f.suffix == ".dll" for f in d.iterdir() if f.is_file())]
+    for d in dll_dirs:
+        try:
+            os.add_dll_directory(d)
+        except (OSError, AttributeError):
+            pass
+    if dll_dirs:
+        os.environ["PATH"] = os.pathsep.join(dll_dirs) + os.pathsep + os.environ["PATH"]
+    return bool(dll_dirs)
+
+
+add_cuda_to_path()
 
 import numpy as np
 import tkinter as tk
@@ -41,14 +77,16 @@ import sounddevice as sd
 import sherpa_onnx
 from faster_whisper import WhisperModel
 
-MODEL_DIR = APP_DIR / "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
-PARAKEET_DIR = APP_DIR / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
-PIPER_DIR = APP_DIR / "vits-piper-en_US-libritts_r-medium"
-PARAKEET_V3_DIR = APP_DIR / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+import setup_models
+
+MODEL_DIR = DATA_DIR / "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
+PARAKEET_DIR = DATA_DIR / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+PIPER_DIR = DATA_DIR / "vits-piper-en_US-libritts_r-medium"
+PARAKEET_V3_DIR = DATA_DIR / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
 DEFAULT_MODEL = "parakeet-tdt-0.6b-v2 (en, CPU)"
 # vocabulary-bias terms: prompt.txt holds one term per line; the initial_prompt
 # fed to whisper is built from them (~224 token budget)
-VOCAB_FILE = APP_DIR / "prompt.txt"
+VOCAB_FILE = DATA_DIR / "prompt.txt"
 
 
 def load_vocab():
@@ -76,7 +114,7 @@ INITIAL_PROMPT = build_prompt(VOCAB_WORDS)
 
 # spoken-command replacer (edit replacements.json to extend)
 try:
-    _repl = json.loads((APP_DIR / "replacements.json").read_text(encoding="utf-8"))
+    _repl = json.loads((DATA_DIR / "replacements.json").read_text(encoding="utf-8"))
     UTTERANCE_REPLACEMENTS = _repl.get("utterance", {})
     PHRASE_REPLACEMENTS = _repl.get("phrase", {})
 except (OSError, json.JSONDecodeError):
@@ -98,7 +136,7 @@ def apply_replacements(text):
     if out.lstrip().startswith("/"):
         out = out.strip().rstrip(".!?,")  # commands should not end with punctuation
     return out
-SETTINGS_FILE = APP_DIR / "gui_settings.json"
+SETTINGS_FILE = DATA_DIR / "gui_settings.json"
 SAMPLE_RATE = 16000
 CHUNK = 1600            # 100 ms
 PARTIAL_INTERVAL = 0.9  # s between whisper partial re-decodes
@@ -187,6 +225,18 @@ def whisper_worker():
         if loaded != requested_model:
             want = requested_model
             msg_queue.put(("model_loading", want))
+            # GPU backends need CUDA DLLs; when frozen, fetch them on first use.
+            if FROZEN and "GPU" in want and not setup_models.cuda_present(DATA_DIR):
+                msg_queue.put(("status", "Downloading GPU runtime (one-time, ~0.5 GB)..."))
+                try:
+                    setup_models.ensure_cuda(DATA_DIR, progress=lambda n, s, d, t: msg_queue.put(
+                        ("status", f"GPU runtime {n}: {int(d / t * 100) if t else 0}%")))
+                    add_cuda_to_path()
+                except Exception as e:
+                    msg_queue.put(("status", f"GPU setup failed: {e} — pick a CPU model"))
+                    loaded = want
+                    decode = None
+                    continue
             try:
                 decode = MODELS[want]()
                 loaded = want
@@ -979,6 +1029,56 @@ def on_close():
 
 root.protocol("WM_DELETE_WINDOW", on_close)
 keyboard.hook(_global_key_handler, suppress=True)  # dedicated Insert/Delete/Home only
+def first_run_setup():
+    """Download required speech models on first run (blocks with a small splash
+    before the worker threads start). The streaming + default CPU models must be
+    present for the app to function."""
+    if MODEL_DIR.exists() and PARAKEET_DIR.exists():
+        return
+    win = tk.Toplevel(root)
+    win.title("Talkie-Putty — first-run setup")
+    win.geometry("440x130")
+    win.attributes("-topmost", True)
+    msg = tk.StringVar(value="Downloading speech models (first run only)...")
+    tk.Label(win, textvariable=msg, wraplength=410, justify="left").pack(padx=16, pady=(18, 10))
+    bar = ttk.Progressbar(win, length=400, mode="determinate", maximum=100)
+    bar.pack(padx=16)
+    st = {"text": "", "pct": 0}
+
+    def progress(name, stage, done, total):
+        if stage == "download":
+            st["text"] = f"Downloading {name}"
+            st["pct"] = (done / total * 100) if total else 0
+        elif stage == "extract":
+            st["text"] = f"Extracting {name}"
+        elif stage in ("skip", "ok"):
+            st["pct"] = 0
+
+    holder = {}
+
+    def run():
+        holder["failures"] = setup_models.ensure_models(
+            DATA_DIR, include_optional=False, progress=progress)
+        holder["done"] = True
+
+    threading.Thread(target=run, daemon=True).start()
+    while not holder.get("done"):
+        msg.set(st["text"] or "Preparing...")
+        bar["value"] = st["pct"]
+        root.update()
+        time.sleep(0.05)
+    win.destroy()
+    if holder.get("failures"):
+        from tkinter import messagebox
+        messagebox.showerror(
+            "Talkie-Putty",
+            "Failed to download required models:\n\n" + "\n".join(holder["failures"])
+            + "\n\nCheck your internet connection and restart.")
+        root.destroy()
+        sys.exit(1)
+
+
+first_run_setup()
 threading.Thread(target=whisper_worker, daemon=True).start()
 threading.Thread(target=mic_worker, daemon=True).start()
 threading.Thread(target=tts_worker, daemon=True).start()
