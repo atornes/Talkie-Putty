@@ -139,6 +139,15 @@ import sherpa_onnx
 from faster_whisper import WhisperModel
 
 import setup_models
+import updater
+import version
+
+CURRENT_VERSION = version.__version__
+APP_MUTEX = "TalkiePutty.SingleInstance"  # matches AppMutex in installer.iss
+try:
+    ctypes.windll.kernel32.CreateMutexW(None, False, APP_MUTEX)
+except Exception:
+    log.warning("could not create app mutex", exc_info=True)
 
 MODEL_DIR = DATA_DIR / "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
 PARAKEET_DIR = DATA_DIR / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
@@ -1094,6 +1103,73 @@ def do_restart():
     os._exit(0)
 
 
+UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000  # daily
+
+
+def check_for_updates(manual=False):
+    """Ask GitHub for the latest release on a worker thread; post the result back."""
+    def work():
+        try:
+            info = updater.get_latest_release()
+        except Exception:
+            log.exception("update check failed")
+            if manual:
+                msg_queue.put(("status", "update check failed — see log"))
+            return
+        if info and updater.is_newer(info["version"], CURRENT_VERSION):
+            log.info("update available: %s (have %s)", info["tag"], CURRENT_VERSION)
+            msg_queue.put(("update_available", info))
+        elif manual:
+            msg_queue.put(("status", f"up to date (v{CURRENT_VERSION})"))
+
+    threading.Thread(target=work, daemon=True, name="update-check").start()
+
+
+def schedule_update_checks():
+    check_for_updates()
+    root.after(UPDATE_INTERVAL_MS, schedule_update_checks)
+
+
+def start_update_download(info):
+    progress_dialog.open(f"Updating to {info['tag']}")
+
+    def work():
+        try:
+            path = updater.download_installer(
+                info["url"], info["name"],
+                progress=lambda n, s, d, t: msg_queue.put(
+                    ("dl_progress", (f"Downloading {info['tag']}",
+                                     (d / t * 100) if t else None))))
+            msg_queue.put(("dl_close", None))
+            msg_queue.put(("update_ready", str(path)))
+        except Exception as e:
+            log.exception("update download failed")
+            msg_queue.put(("dl_close", None))
+            msg_queue.put(("error_report", f"Update download failed:\n{e}"))
+
+    threading.Thread(target=work, daemon=True, name="update-download").start()
+
+
+def run_installer_and_exit(installer_path):
+    import subprocess
+    log.info("launching silent installer: %s", installer_path)
+    try:
+        stop_event.set()
+        keyboard.unhook_all()
+    except Exception:
+        log.exception("pre-update cleanup failed")
+    try:
+        # /VERYSILENT installs without UI; the installer's post-install Run entry
+        # relaunches the app. App exits now so its files aren't locked.
+        subprocess.Popen([installer_path, "/VERYSILENT", "/SUPPRESSMSGBOXES",
+                          "/NORESTART"])
+    except Exception:
+        log.exception("installer launch failed")
+        return
+    root.destroy()
+    os._exit(0)
+
+
 def poll():
     global displayed_final_utt, last_external_hwnd
     global mic_pipeline_ready, ready_model_name
@@ -1133,6 +1209,20 @@ def poll():
                 status.config(text=str(payload))
                 root.update_idletasks()
                 root.after(700, do_restart)
+            elif kind == "update_available":
+                from tkinter import messagebox
+                info = payload
+                notes = info["notes"].strip()
+                if len(notes) > 400:
+                    notes = notes[:400] + "..."
+                prompt = (f"Talkie-Putty {info['tag']} is available "
+                          f"(you have v{CURRENT_VERSION}).\n\nUpdate now?")
+                if notes:
+                    prompt += f"\n\nWhat's new:\n{notes}"
+                if messagebox.askyesno("Talkie-Putty update", prompt):
+                    start_update_download(info)
+            elif kind == "update_ready":
+                run_installer_and_exit(payload)
             elif kind == "tts_ready":
                 voice_box.configure(values=[str(i) for i in range(payload)])
             elif kind == "level":
@@ -1275,4 +1365,6 @@ threading.Thread(target=whisper_worker, daemon=True).start()
 threading.Thread(target=mic_worker, daemon=True).start()
 threading.Thread(target=tts_worker, daemon=True).start()
 root.after(50, poll)
+if FROZEN:  # only installed builds can apply an installer update
+    root.after(8000, schedule_update_checks)
 root.mainloop()

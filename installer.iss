@@ -19,6 +19,11 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
+; Lets the (silent) updater installer detect/close a running instance before
+; replacing files. The app creates this same named mutex at startup.
+AppMutex=TalkiePutty.SingleInstance
+CloseApplications=yes
+RestartApplications=no
 DisableProgramGroupPage=yes
 OutputDir=installer-output
 OutputBaseFilename={#AppName}-Setup-{#AppVersion}
@@ -42,4 +47,5 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
+; No skipifsilent: a silent (auto-update) install relaunches the app too.
+Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall

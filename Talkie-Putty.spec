@@ -12,7 +12,7 @@ for pkg in ("sherpa_onnx", "ctranslate2", "faster_whisper", "sounddevice", "keyb
 # editable default configs (seeded into %LOCALAPPDATA% on first run) + window icon
 datas += [("prompt.txt", "."), ("replacements.json", "."),
           ("assets/icon.ico", "assets")]
-hiddenimports += ["setup_models"]
+hiddenimports += ["setup_models", "updater", "version"]
 
 a = Analysis(
     ["live_mic_gui3.py"],

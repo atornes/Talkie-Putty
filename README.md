@@ -28,6 +28,13 @@ once, on demand.
 
 To run from source instead, see [Requirements](#requirements) below.
 
+### Automatic updates
+
+Installed builds check [GitHub Releases](https://github.com/atornes/Talkie-Putty/releases)
+shortly after launch and once a day. When a newer version exists, the app asks whether to
+update; if you accept, it downloads the installer, runs it silently, and relaunches itself.
+(Source checkouts don't auto-update.)
+
 ## Requirements
 
 - Windows 10/11, Python 3.10+
