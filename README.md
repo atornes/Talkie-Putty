@@ -32,8 +32,9 @@ To run from source instead, see [Requirements](#requirements) below.
 
 Installed builds check [GitHub Releases](https://github.com/atornes/Talkie-Putty/releases)
 shortly after launch and once a day. When a newer version exists, the app asks whether to
-update; if you accept, it downloads the installer, runs it silently, and relaunches itself.
-(Source checkouts don't auto-update.)
+update; if you accept, it downloads the installer and runs it with `/SILENT` — no wizard
+buttons to click, but the progress window and any error dialogs stay visible — then
+relaunches itself. (Source checkouts don't auto-update.)
 
 ## Requirements
 

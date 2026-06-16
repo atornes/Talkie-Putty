@@ -47,5 +47,5 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
-; No skipifsilent: a silent (auto-update) install relaunches the app too.
+; No skipifsilent: a /SILENT (auto-update) install relaunches the app too.
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall

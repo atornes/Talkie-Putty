@@ -1159,10 +1159,10 @@ def run_installer_and_exit(installer_path):
     except Exception:
         log.exception("pre-update cleanup failed")
     try:
-        # /VERYSILENT installs without UI; the installer's post-install Run entry
-        # relaunches the app. App exits now so its files aren't locked.
-        subprocess.Popen([installer_path, "/VERYSILENT", "/SUPPRESSMSGBOXES",
-                          "/NORESTART"])
+        # /SILENT skips wizard pages/buttons but still shows the progress window
+        # and any error dialogs (so install problems stay visible). The installer's
+        # post-install Run entry relaunches the app. Exit now so files aren't locked.
+        subprocess.Popen([installer_path, "/SILENT", "/NORESTART"])
     except Exception:
         log.exception("installer launch failed")
         return
