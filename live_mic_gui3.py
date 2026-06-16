@@ -870,6 +870,154 @@ def open_vocab_editor():
     entry.focus_set()
 
 
+def open_replacements_editor():
+    c = THEMES[dark_mode]
+    dlg = tk.Toplevel(root)
+    dlg.title("Spoken replacements")
+    dlg.transient(root)
+    x = root.winfo_x() + root.winfo_width() + 8
+    y = root.winfo_y()
+    dlg.geometry(f"480x500+{x}+{y}")
+    dlg.configure(bg=c["bg"])
+
+    def themed_btn(parent, label, cmd):
+        return tk.Button(parent, text=label, command=cmd,
+                         bg=c["btn_bg"], fg=c["btn_fg"],
+                         activebackground=c["btn_active"], activeforeground=c["fg"],
+                         relief="flat" if dark_mode else "raised", bd=1)
+
+    def norm_utt(s):  # match apply_replacements() normalisation for utterance keys
+        s = re.sub(r"[^\w\s]", "", s).lower()
+        return re.sub(r"\s+", " ", s).strip()
+
+    tk.Label(dlg, text=("Replace recognised speech. utterance = the whole sentence must "
+                        "match (fuzzy); phrase = replaced anywhere in the text."),
+             bg=c["bg"], fg=c["dim"], anchor="w", justify="left",
+             wraplength=460).pack(fill="x", padx=8, pady=(8, 0))
+
+    row1 = tk.Frame(dlg, bg=c["bg"])
+    row1.pack(fill="x", padx=8, pady=(8, 0))
+    type_var = tk.StringVar(value="utterance")
+    ttk.Combobox(row1, textvariable=type_var, state="readonly", width=10,
+                 values=["utterance", "phrase"]).pack(side="left")
+    spoken = tk.Entry(row1, bg=c["box_bg"], fg=c["box_fg"],
+                      insertbackground=c["caret"], relief="flat")
+    spoken.pack(side="left", fill="x", expand=True, padx=(8, 0), ipady=3)
+
+    row2 = tk.Frame(dlg, bg=c["bg"])
+    row2.pack(fill="x", padx=8, pady=(6, 0))
+    tk.Label(row2, text="→", bg=c["bg"], fg=c["fg"]).pack(side="left")
+    repl = tk.Entry(row2, bg=c["box_bg"], fg=c["box_fg"],
+                    insertbackground=c["caret"], relief="flat")
+    repl.pack(side="left", fill="x", expand=True, padx=(8, 0), ipady=3)
+
+    list_frame = tk.Frame(dlg, bg=c["bg"])
+    list_frame.pack(fill="both", expand=True, padx=8, pady=8)
+    lb = tk.Listbox(list_frame, bg=c["box_bg"], fg=c["box_fg"],
+                    selectbackground=c["sel"], selectforeground=c["box_fg"],
+                    relief="flat", font=("Segoe UI", 11), activestyle="none")
+    sb = ttk.Scrollbar(list_frame, orient="vertical", command=lb.yview)
+    lb.configure(yscrollcommand=sb.set)
+    sb.pack(side="right", fill="y")
+    lb.pack(side="left", fill="both", expand=True)
+
+    data = ([{"type": "utterance", "key": k, "value": v}
+             for k, v in UTTERANCE_REPLACEMENTS.items()]
+            + [{"type": "phrase", "key": k, "value": v}
+               for k, v in PHRASE_REPLACEMENTS.items()])
+
+    def render():
+        lb.delete(0, "end")
+        for r in data:
+            lb.insert("end", f'{r["key"]}   →   {r["value"]}    · {r["type"]}')
+
+    render()
+    edit_index = [None]
+
+    def add_or_update(_event=None):
+        t = type_var.get()
+        k = spoken.get().strip()
+        if t == "utterance":
+            k = norm_utt(k)
+        v = repl.get().strip()
+        if not k or not v:
+            return
+        rec = {"type": t, "key": k, "value": v}
+        if edit_index[0] is not None:
+            data[edit_index[0]] = rec
+            edit_index[0] = None
+        else:
+            for i, r in enumerate(data):
+                if r["type"] == t and r["key"].lower() == k.lower():
+                    data[i] = rec
+                    break
+            else:
+                data.append(rec)
+        spoken.delete(0, "end")
+        repl.delete(0, "end")
+        render()
+        spoken.focus_set()
+
+    def remove_selected():
+        for i in reversed(lb.curselection()):
+            del data[i]
+        edit_index[0] = None
+        spoken.delete(0, "end")
+        repl.delete(0, "end")
+        render()
+
+    def edit_selected(_event=None):
+        sel = lb.curselection()
+        if sel:
+            r = data[sel[0]]
+            edit_index[0] = sel[0]
+            type_var.set(r["type"])
+            spoken.delete(0, "end")
+            spoken.insert(0, r["key"])
+            repl.delete(0, "end")
+            repl.insert(0, r["value"])
+            spoken.focus_set()
+
+    spoken.bind("<Return>", add_or_update)
+    repl.bind("<Return>", add_or_update)
+    lb.bind("<Double-Button-1>", edit_selected)
+    lb.bind("<Delete>", lambda e: (remove_selected(), "break")[1])
+    themed_btn(row2, "Add / Update", add_or_update).pack(side="left", padx=(8, 0))
+
+    bar = tk.Frame(dlg, bg=c["bg"])
+    bar.pack(fill="x", padx=8, pady=(0, 8))
+
+    def save():
+        global UTTERANCE_REPLACEMENTS, PHRASE_REPLACEMENTS
+        utt = {r["key"]: r["value"] for r in data if r["type"] == "utterance"}
+        phr = {r["key"]: r["value"] for r in data if r["type"] == "phrase"}
+        payload = {
+            "_comment": ("utterance: whole spoken sentence (lowercased, punctuation "
+                         "stripped) must equal key -> replaced by value. phrase: "
+                         "replaced anywhere in text, case-insensitive."),
+            "utterance": utt,
+            "phrase": phr,
+        }
+        (DATA_DIR / "replacements.json").write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        UTTERANCE_REPLACEMENTS = utt
+        PHRASE_REPLACEMENTS = phr
+        dlg.destroy()
+
+    themed_btn(bar, "Cancel", dlg.destroy).pack(side="right", padx=(8, 0))
+    themed_btn(bar, "Save", save).pack(side="right")
+    themed_btn(bar, "Remove selected", remove_selected).pack(side="left")
+
+    dlg.update_idletasks()
+    try:
+        val = ctypes.c_int(1 if dark_mode else 0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            user32.GetParent(dlg.winfo_id()), 20, ctypes.byref(val), 4)
+    except Exception:
+        pass
+    spoken.focus_set()
+
+
 btn_cut = tk.Button(btns, text="Cut all to clipboard", command=cut_all)
 btn_cut.pack(side="left")
 btn_clear = tk.Button(btns, text="Clear", command=clear_all)
@@ -878,6 +1026,8 @@ btn_last = tk.Button(btns, text="Clear last sentence", command=clear_last)
 btn_last.pack(side="left")
 btn_vocab = tk.Button(btns, text="Vocabulary…", command=open_vocab_editor)
 btn_vocab.pack(side="left", padx=8)
+btn_repl = tk.Button(btns, text="Replacements…", command=open_replacements_editor)
+btn_repl.pack(side="left")
 hint_label = tk.Label(btns, text="Insert = cut & paste anywhere | Del = clear")
 hint_label.pack(side="right")
 
@@ -923,7 +1073,7 @@ speed_label = tk.Label(btns, text="Speed:")
 speed_label.pack(side="right", padx=(0, 2))
 theme_btn = tk.Button(top, width=3, command=lambda: toggle_theme())
 theme_btn.pack(side="right", padx=(0, 6))
-theme_buttons = [btn_cut, btn_clear, btn_last, btn_vocab, theme_btn]
+theme_buttons = [btn_cut, btn_clear, btn_last, btn_vocab, btn_repl, theme_btn]
 
 displayed_final_utt = -1
 ignore_before_utt = 0      # whisper results for utterances below this are stale
