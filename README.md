@@ -37,8 +37,15 @@ explicitly to match your CUDA version).
 
 ## Models
 
-Large model files are **not** in the repo (gitignored). Fetch and extract them into the
-project root so the directory names match exactly.
+Large model files are **not** in the repo (gitignored). Run the bootstrap script to
+download and extract them automatically:
+
+```powershell
+python setup_models.py
+```
+
+It fetches the sherpa-onnx archives into the project root (skipping any already present).
+For reference, the directories and their sources:
 
 | Directory | Purpose | Source |
 |-----------|---------|--------|
@@ -48,13 +55,6 @@ project root so the directory names match exactly.
 
 The GPU Whisper backends (`distil-large-v3.5`, `large-v3-turbo`, `medium.en`)
 auto-download from Hugging Face on first use — no manual setup.
-
-Download `.tar.bz2` archives from the sherpa-onnx releases page and extract into the
-project root, e.g.:
-
-```powershell
-tar -xjf sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2
-```
 
 ## Run
 
