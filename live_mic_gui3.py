@@ -237,8 +237,33 @@ def submit_job(utt_id, audio, final):
     _job_available.set()
 
 
+def _clear_incomplete_hf_cache(err):
+    """An interrupted HF download can leave a snapshot with metadata but no
+    model.bin. Delete that model's cache dir so it re-downloads cleanly. Returns
+    the dir removed, or None."""
+    m = re.search(r"in model '([^']+)'", str(err))
+    if not m:
+        return None
+    p = pathlib.Path(m.group(1))
+    for anc in [p, *p.parents]:
+        if anc.name.startswith("models--"):
+            shutil.rmtree(anc, ignore_errors=True)
+            log.info("cleared incomplete HF cache: %s", anc)
+            return anc
+    return None
+
+
 def make_whisper(repo, lang):
-    model = WhisperModel(repo, device="cuda", compute_type="float16")
+    try:
+        model = WhisperModel(repo, device="cuda", compute_type="float16")
+    except RuntimeError as e:
+        # incomplete/corrupt download → clear cache and re-download once
+        if ("model.bin" in str(e) or "Unable to open file" in str(e)) \
+                and _clear_incomplete_hf_cache(e):
+            log.warning("retrying whisper load after clearing cache: %s", e)
+            model = WhisperModel(repo, device="cuda", compute_type="float16")
+        else:
+            raise
     model.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), language=lang, beam_size=1)
 
     def decode(audio, final):
