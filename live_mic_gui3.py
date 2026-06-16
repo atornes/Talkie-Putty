@@ -295,7 +295,6 @@ def whisper_worker():
                     setup_models.ensure_cuda(DATA_DIR, progress=lambda n, s, d, t: msg_queue.put(
                         ("dl_progress", (f"Downloading GPU runtime — {n}",
                                          (d / t * 100) if t else None))))
-                    add_cuda_to_path()
                 except Exception as e:
                     log.exception("CUDA runtime setup failed for %s", want)
                     msg_queue.put(("dl_close", None))
@@ -305,6 +304,18 @@ def whisper_worker():
                     loaded = want
                     decode = None
                     continue
+                # The CUDA DLLs are only reliably resolved when present on the DLL
+                # search path at process start (before ctranslate2 touches CUDA).
+                # Just-downloaded → ask for a restart rather than load in this session.
+                add_cuda_to_path()
+                log.info("CUDA runtime installed; restart required before loading %s", want)
+                msg_queue.put(("dl_close", None))
+                msg_queue.put(("notice",
+                               "GPU runtime installed.\n\nPlease restart Talkie-Putty, then "
+                               "select the GPU model again — it will load from now on."))
+                loaded = want
+                decode = None
+                continue
             try:
                 if is_gpu:
                     msg_queue.put(("dl_progress", (
@@ -1097,6 +1108,9 @@ def poll():
                 messagebox.showerror("Talkie-Putty", str(payload)
                                      + f"\n\nLog: {LOG_FILE}")
                 open_log_file()
+            elif kind == "notice":
+                from tkinter import messagebox
+                messagebox.showinfo("Talkie-Putty", str(payload))
             elif kind == "tts_ready":
                 voice_box.configure(values=[str(i) for i in range(payload)])
             elif kind == "level":
