@@ -74,9 +74,20 @@ python live_mic_gui3.py
 ```
 
 - Pick a model from the dropdown (default: `parakeet-tdt-0.6b-v2 (en, CPU)`).
-- Speak. Press **Insert** while a terminal is focused to cut all text and paste it
-  (Ctrl+V). Insert is suppressed system-wide while the app runs.
+- Speak — words appear live in the always-on-top window.
 - Window size/position and chosen model persist in `gui_settings.json` (local, gitignored).
+
+## Hotkeys
+
+The editing-cluster keys are captured globally while the app runs (the **dedicated**
+keys only — their numpad twins with NumLock off are left alone).
+
+| Key | Where | Action |
+|-----|-------|--------|
+| **Insert** | any other window focused | Cut all dictated text and paste it (Ctrl+V) into that window. Suppressed system-wide so it never types a literal Insert. |
+| **Insert** | Talkie-Putty focused | Cut all text, refocus the last terminal/window you used, and paste there. |
+| **Delete** | a terminal focused | Clear the dictation buffer. (Passes through to the OS everywhere else.) |
+| **Home** (double-tap) | anywhere | Speak the clipboard aloud (Piper TTS). Double-tap again while it's talking to stop. |
 
 ## Configuration
 
