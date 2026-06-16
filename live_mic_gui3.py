@@ -1101,7 +1101,29 @@ THEMES = {
                 btn_bg="SystemButtonFace", btn_fg="#000000",
                 btn_active="SystemButtonFace"),
 }
-dark_mode = bool(saved.get("dark", True))
+def windows_prefers_dark():
+    """Read the Windows apps theme (HKCU). Returns True (dark) / False (light) /
+    None if it can't be determined."""
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        try:
+            value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        finally:
+            key.Close()
+        return value == 0  # 0 = dark apps, 1 = light apps
+    except OSError:
+        return None
+
+
+# First run follows the Windows theme; after that the user's toggle is remembered.
+if "dark" in saved:
+    dark_mode = bool(saved["dark"])
+else:
+    win_dark = windows_prefers_dark()
+    dark_mode = True if win_dark is None else win_dark
 _style = ttk.Style(root)
 _style.theme_use("clam")
 
