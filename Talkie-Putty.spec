@@ -9,8 +9,9 @@ for pkg in ("sherpa_onnx", "ctranslate2", "faster_whisper", "sounddevice", "keyb
     binaries += b
     hiddenimports += h
 
-# editable default configs (seeded into %LOCALAPPDATA% on first run)
-datas += [("prompt.txt", "."), ("replacements.json", ".")]
+# editable default configs (seeded into %LOCALAPPDATA% on first run) + window icon
+datas += [("prompt.txt", "."), ("replacements.json", "."),
+          ("assets/icon.ico", "assets")]
 hiddenimports += ["setup_models"]
 
 a = Analysis(

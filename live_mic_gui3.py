@@ -30,6 +30,7 @@ import sys
 
 APP_DIR = pathlib.Path(__file__).parent
 RES_DIR = pathlib.Path(getattr(sys, "_MEIPASS", APP_DIR))  # bundled read-only resources
+ICON_FILE = RES_DIR / "assets" / "icon.ico"
 FROZEN = getattr(sys, "frozen", False)
 # When installed (frozen) models/config/settings live in a writable per-user dir;
 # in a dev checkout they sit next to the script.
@@ -44,6 +45,66 @@ for _cfg in ("prompt.txt", "replacements.json"):
     _dst, _src = DATA_DIR / _cfg, RES_DIR / _cfg
     if FROZEN and not _dst.exists() and _src.exists():
         shutil.copyfile(_src, _dst)
+
+# ---------------- logging ----------------
+# A windowed (frozen) exe has no console, so model-load / download errors are
+# otherwise invisible. Everything goes to this rotating log; on a fatal error we
+# open it for the user to read and report.
+import logging
+import traceback
+from logging.handlers import RotatingFileHandler
+
+LOG_FILE = DATA_DIR / "talkie-putty.log"
+_handler = RotatingFileHandler(str(LOG_FILE), maxBytes=1_000_000, backupCount=2,
+                               encoding="utf-8")
+_handler.setFormatter(logging.Formatter(
+    "%(asctime)s %(levelname)s [%(threadName)s] %(name)s: %(message)s"))
+logging.getLogger().setLevel(logging.INFO)
+logging.getLogger().addHandler(_handler)
+log = logging.getLogger("talkie")
+log.info("=== Talkie-Putty starting === FROZEN=%s DATA_DIR=%s python=%s",
+         FROZEN, DATA_DIR, sys.version.split()[0])
+
+
+def open_log_file():
+    try:
+        os.startfile(str(LOG_FILE))  # noqa: S606 - Windows, intended
+    except Exception:
+        log.exception("could not open log file")
+
+
+# Native libs (ctranslate2) and stray prints write to stdout/stderr, which the
+# frozen exe drops; funnel them into the log.
+if FROZEN:
+    class _StreamToLog:
+        def __init__(self, level):
+            self._level = level
+
+        def write(self, msg):
+            msg = msg.rstrip()
+            if msg:
+                log.log(self._level, msg)
+
+        def flush(self):
+            pass
+
+    sys.stdout = _StreamToLog(logging.INFO)
+    sys.stderr = _StreamToLog(logging.ERROR)
+
+
+def _excepthook(exc_type, exc, tb):
+    log.error("Uncaught exception:\n%s",
+              "".join(traceback.format_exception(exc_type, exc, tb)))
+
+
+def _thread_excepthook(args):
+    log.error("Uncaught exception in thread %s:\n%s", args.thread.name,
+              "".join(traceback.format_exception(
+                  args.exc_type, args.exc_value, args.exc_traceback)))
+
+
+sys.excepthook = _excepthook
+threading.excepthook = _thread_excepthook
 
 
 def add_cuda_to_path():
@@ -236,8 +297,11 @@ def whisper_worker():
                                          (d / t * 100) if t else None))))
                     add_cuda_to_path()
                 except Exception as e:
+                    log.exception("CUDA runtime setup failed for %s", want)
                     msg_queue.put(("dl_close", None))
-                    msg_queue.put(("status", f"GPU setup failed: {e} — pick a CPU model"))
+                    msg_queue.put(("error_report",
+                                   f"GPU runtime download failed:\n{e}\n\nPick a CPU model, "
+                                   "or report the error from the log."))
                     loaded = want
                     decode = None
                     continue
@@ -247,13 +311,18 @@ def whisper_worker():
                         f"Loading {want}\n"
                         "(first run downloads model weights — this can take a few minutes)",
                         None)))
+                log.info("loading model: %s", want)
                 decode = MODELS[want]()
                 loaded = want
+                log.info("model ready: %s", want)
                 msg_queue.put(("model_ready", want))
             except Exception as e:
-                msg_queue.put(("status", f"load failed: {e}"))
+                log.exception("model load failed: %s", want)
                 loaded = want  # don't retry in a tight loop
                 decode = None
+                msg_queue.put(("error_report",
+                               f"Failed to load {want}:\n{e}\n\n"
+                               "The log has the full error — please report it."))
             finally:
                 if is_gpu:
                     msg_queue.put(("dl_close", None))
@@ -500,6 +569,10 @@ def _global_key_handler(e):
 # ---------------- GUI ----------------
 root = tk.Tk()
 root.title("Talkie-Putty — dictate to terminal (Insert = paste)")
+try:
+    root.iconbitmap(default=str(ICON_FILE))  # default= applies to Toplevels too
+except Exception:
+    log.warning("could not set window icon from %s", ICON_FILE, exc_info=True)
 root.attributes("-topmost", True)
 
 
@@ -1018,6 +1091,12 @@ def poll():
                 progress_dialog.progress(*payload)
             elif kind == "dl_close":
                 progress_dialog.close()
+            elif kind == "error_report":
+                status.config(text="error — see log")
+                from tkinter import messagebox
+                messagebox.showerror("Talkie-Putty", str(payload)
+                                     + f"\n\nLog: {LOG_FILE}")
+                open_log_file()
             elif kind == "tts_ready":
                 voice_box.configure(values=[str(i) for i in range(payload)])
             elif kind == "level":
@@ -1144,11 +1223,13 @@ def first_run_setup():
         time.sleep(0.05)
     win.destroy()
     if holder.get("failures"):
+        log.error("required model download failed: %s", holder["failures"])
         from tkinter import messagebox
         messagebox.showerror(
             "Talkie-Putty",
             "Failed to download required models:\n\n" + "\n".join(holder["failures"])
-            + "\n\nCheck your internet connection and restart.")
+            + f"\n\nCheck your internet connection and restart.\n\nLog: {LOG_FILE}")
+        open_log_file()
         root.destroy()
         sys.exit(1)
 

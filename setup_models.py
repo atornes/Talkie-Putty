@@ -11,6 +11,7 @@ CUDA runtime DLLs that ctranslate2 needs on Windows.
 Pure standard library — no extra pip installs required.
 """
 import io
+import logging
 import pathlib
 import sys
 import tarfile
@@ -18,6 +19,7 @@ import tempfile
 import urllib.request
 import zipfile
 
+log = logging.getLogger("talkie.setup")
 APP_DIR = pathlib.Path(__file__).parent
 BASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
 
@@ -87,9 +89,12 @@ def ensure_models(dest_root, include_optional=True, progress=None):
             progress(name, "skip", 0, 0)
             continue
         try:
+            log.info("downloading model %s from %s", name, url)
             fetch_and_extract(url, dest_root, name, progress)
+            log.info("model ready: %s", name)
             progress(name, "ok", 0, 0)
         except Exception as e:  # noqa: BLE001
+            log.exception("model download/extract failed: %s (%s)", name, url)
             progress(name, "fail", 0, 0)
             if required:
                 failures.append(f"{name}: {e}")
@@ -126,6 +131,7 @@ def ensure_cuda(dest_root, progress=None):
     cuda_dir.mkdir(parents=True, exist_ok=True)
     for pkg in CUDA_PACKAGES:
         wheel_url = _pypi_win_wheel_url(pkg)
+        log.info("downloading CUDA wheel %s from %s", pkg, wheel_url)
         buf = io.BytesIO()
         _download(wheel_url, buf, progress, pkg)
         progress(pkg, "extract", 0, 0)
