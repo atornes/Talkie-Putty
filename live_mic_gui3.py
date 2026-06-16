@@ -224,20 +224,29 @@ def whisper_worker():
     while not stop_event.is_set():
         if loaded != requested_model:
             want = requested_model
+            is_gpu = "GPU" in want  # GPU backends may download CUDA + weights
             msg_queue.put(("model_loading", want))
+            if is_gpu:
+                msg_queue.put(("dl_open", f"Loading {want}"))
             # GPU backends need CUDA DLLs; when frozen, fetch them on first use.
-            if FROZEN and "GPU" in want and not setup_models.cuda_present(DATA_DIR):
-                msg_queue.put(("status", "Downloading GPU runtime (one-time, ~0.5 GB)..."))
+            if FROZEN and is_gpu and not setup_models.cuda_present(DATA_DIR):
                 try:
                     setup_models.ensure_cuda(DATA_DIR, progress=lambda n, s, d, t: msg_queue.put(
-                        ("status", f"GPU runtime {n}: {int(d / t * 100) if t else 0}%")))
+                        ("dl_progress", (f"Downloading GPU runtime — {n}",
+                                         (d / t * 100) if t else None))))
                     add_cuda_to_path()
                 except Exception as e:
+                    msg_queue.put(("dl_close", None))
                     msg_queue.put(("status", f"GPU setup failed: {e} — pick a CPU model"))
                     loaded = want
                     decode = None
                     continue
             try:
+                if is_gpu:
+                    msg_queue.put(("dl_progress", (
+                        f"Loading {want}\n"
+                        "(first run downloads model weights — this can take a few minutes)",
+                        None)))
                 decode = MODELS[want]()
                 loaded = want
                 msg_queue.put(("model_ready", want))
@@ -245,6 +254,9 @@ def whisper_worker():
                 msg_queue.put(("status", f"load failed: {e}"))
                 loaded = want  # don't retry in a tight loop
                 decode = None
+            finally:
+                if is_gpu:
+                    msg_queue.put(("dl_close", None))
             continue
         if not _job_available.wait(timeout=0.2):
             continue
@@ -923,6 +935,63 @@ def send_paste_if_focus_left():
         keyboard.send("ctrl+v")
 
 
+class ProgressDialog:
+    """A download/loading window driven from the main thread via msg_queue.
+
+    Determinate bar when a percentage is known (CUDA download), animated
+    indeterminate bar otherwise (Whisper weights download / model build)."""
+
+    def __init__(self, master):
+        self.master = master
+        self.win = None
+        self.mode = None
+
+    def open(self, title):
+        if self.win is not None:
+            self.close()
+        self.win = tk.Toplevel(self.master)
+        self.win.title(title)
+        self.win.geometry("460x130")
+        self.win.resizable(False, False)
+        self.win.attributes("-topmost", True)
+        self.win.protocol("WM_DELETE_WINDOW", lambda: None)  # no closing mid-download
+        self.msg = tk.StringVar(value="Preparing...")
+        tk.Label(self.win, textvariable=self.msg, wraplength=430,
+                 justify="left").pack(padx=16, pady=(18, 10))
+        self.bar = ttk.Progressbar(self.win, length=420, maximum=100)
+        self.bar.pack(padx=16)
+        self.mode = "determinate"
+
+    def progress(self, text, pct):
+        if self.win is None:
+            return
+        if text:
+            self.msg.set(text)
+        if pct is None:
+            if self.mode != "indeterminate":
+                self.bar.config(mode="indeterminate")
+                self.bar.start(12)
+                self.mode = "indeterminate"
+        else:
+            if self.mode != "determinate":
+                self.bar.stop()
+                self.bar.config(mode="determinate")
+                self.mode = "determinate"
+            self.bar["value"] = pct
+
+    def close(self):
+        if self.win is not None:
+            try:
+                self.bar.stop()
+            except tk.TclError:
+                pass
+            self.win.destroy()
+            self.win = None
+
+
+progress_dialog = ProgressDialog(root)
+
+
 def poll():
     global displayed_final_utt, last_external_hwnd
     global mic_pipeline_ready, ready_model_name
@@ -943,6 +1012,12 @@ def poll():
             elif kind == "model_ready":
                 ready_model_name = payload
                 update_ready_status()
+            elif kind == "dl_open":
+                progress_dialog.open(payload)
+            elif kind == "dl_progress":
+                progress_dialog.progress(*payload)
+            elif kind == "dl_close":
+                progress_dialog.close()
             elif kind == "tts_ready":
                 voice_box.configure(values=[str(i) for i in range(payload)])
             elif kind == "level":
