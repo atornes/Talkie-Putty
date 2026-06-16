@@ -69,7 +69,7 @@ For reference, the directories and their sources:
 |-----------|---------|--------|
 | `sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/` | Pass 1 streaming (required) | [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases) |
 | `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/` | Pass 2 CPU backend (default) | [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases) |
-| `vits-piper-en_US-libritts_r-medium/` | Piper TTS (test scripts) | [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases) |
+| `kokoro-int8-multi-lang-v1_1/` | Kokoro text-to-speech voices | [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases) |
 
 The GPU Whisper backends (`distil-large-v3.5`, `large-v3-turbo`, `medium.en`)
 auto-download from Hugging Face on first use — no manual setup.
@@ -95,7 +95,7 @@ keys only — their numpad twins with NumLock off are left alone).
 | **Insert** | any other window focused | Cut all dictated text and paste it (Ctrl+V) into that window. Suppressed system-wide so it never types a literal Insert. |
 | **Insert** | Talkie-Putty focused | Cut all text, refocus the last terminal/window you used, and paste there. |
 | **Delete** | a terminal focused | Clear the dictation buffer. (Passes through to the OS everywhere else.) |
-| **Home** (double-tap) | anywhere | Speak the clipboard aloud (Piper TTS). Double-tap again while it's talking to stop. |
+| **Home** (double-tap) | anywhere | Speak the clipboard aloud (Kokoro TTS). Double-tap again while it's talking to stop. |
 
 ## Configuration
 

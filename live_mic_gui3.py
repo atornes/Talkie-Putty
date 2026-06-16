@@ -151,7 +151,7 @@ except Exception:
 
 MODEL_DIR = DATA_DIR / "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
 PARAKEET_DIR = DATA_DIR / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
-PIPER_DIR = DATA_DIR / "vits-piper-en_US-libritts_r-medium"
+KOKORO_DIR = DATA_DIR / "kokoro-int8-multi-lang-v1_1"
 PARAKEET_V3_DIR = DATA_DIR / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
 DEFAULT_MODEL = "parakeet-tdt-0.6b-v2 (en, CPU)"
 # vocabulary-bias terms: prompt.txt holds one term per line; the initial_prompt
@@ -296,10 +296,9 @@ def whisper_worker():
             want = requested_model
             is_gpu = "GPU" in want  # GPU backends may download CUDA + weights
             msg_queue.put(("model_loading", want))
-            if is_gpu:
-                msg_queue.put(("dl_open", f"Loading {want}"))
             # GPU backends need CUDA DLLs; when frozen, fetch them on first use.
             if FROZEN and is_gpu and not setup_models.cuda_present(DATA_DIR):
+                msg_queue.put(("dl_open", f"Loading {want}"))  # real download → progress UI
                 try:
                     setup_models.ensure_cuda(DATA_DIR, progress=lambda n, s, d, t: msg_queue.put(
                         ("dl_progress", (f"Downloading GPU runtime — {n}",
@@ -322,17 +321,22 @@ def whisper_worker():
                 msg_queue.put(("restart",
                                "GPU runtime installed — restarting to enable GPU models..."))
                 return  # this worker stops; the process will relaunch itself
+            # Show the progress window only the first time a GPU model is loaded
+            # (when its weights are downloaded). After that it's cached, so we just
+            # use the status label.
+            first_download = is_gpu and want not in DOWNLOADED_MODELS
+            if first_download:
+                msg_queue.put(("dl_open", f"Downloading {want}"))
+                msg_queue.put(("dl_progress",
+                               ("Downloading model weights (first run only)...", None)))
             try:
-                if is_gpu:
-                    msg_queue.put(("dl_progress", (
-                        f"Loading {want}\n"
-                        "(first run downloads model weights — this can take a few minutes)",
-                        None)))
                 log.info("loading model: %s", want)
                 decode = MODELS[want]()
                 loaded = want
                 log.info("model ready: %s", want)
                 msg_queue.put(("model_ready", want))
+                if want not in DOWNLOADED_MODELS:
+                    msg_queue.put(("model_downloaded", want))
             except Exception as e:
                 log.exception("model load failed: %s", want)
                 loaded = want  # don't retry in a tight loop
@@ -341,7 +345,7 @@ def whisper_worker():
                                f"Failed to load {want}:\n{e}\n\n"
                                "The log has the full error — please report it."))
             finally:
-                if is_gpu:
+                if first_download:
                     msg_queue.put(("dl_close", None))
             continue
         if not _job_available.wait(timeout=0.2):
@@ -487,14 +491,23 @@ PARAGRAPH_PAUSE = 0.90  # s of silence between lines/paragraphs
 
 
 def tts_worker():
-    tts = sherpa_onnx.OfflineTts(sherpa_onnx.OfflineTtsConfig(
-        model=sherpa_onnx.OfflineTtsModelConfig(
-            vits=sherpa_onnx.OfflineTtsVitsModelConfig(
-                model=str(PIPER_DIR / "en_US-libritts_r-medium.onnx"),
-                tokens=str(PIPER_DIR / "tokens.txt"),
-                data_dir=str(PIPER_DIR / "espeak-ng-data")),
-            num_threads=4),
-        max_num_sentences=1))
+    try:
+        tts = sherpa_onnx.OfflineTts(sherpa_onnx.OfflineTtsConfig(
+            model=sherpa_onnx.OfflineTtsModelConfig(
+                kokoro=sherpa_onnx.OfflineTtsKokoroModelConfig(
+                    model=str(KOKORO_DIR / "model.int8.onnx"),
+                    voices=str(KOKORO_DIR / "voices.bin"),
+                    tokens=str(KOKORO_DIR / "tokens.txt"),
+                    data_dir=str(KOKORO_DIR / "espeak-ng-data"),
+                    dict_dir=str(KOKORO_DIR / "dict"),
+                    lexicon=f"{KOKORO_DIR / 'lexicon-us-en.txt'},"
+                            f"{KOKORO_DIR / 'lexicon-zh.txt'}"),
+                num_threads=8),
+            max_num_sentences=1))
+    except Exception:
+        log.exception("TTS voice failed to load (Kokoro at %s)", KOKORO_DIR)
+        msg_queue.put(("status", "Text-to-speech unavailable — see log"))
+        return
     msg_queue.put(("tts_ready", tts.num_speakers))
 
     def speak(text):
@@ -585,12 +598,11 @@ def _global_key_handler(e):
 
 # ---------------- GUI ----------------
 root = tk.Tk()
-root.title("Talkie-Putty — dictate to terminal (Insert = paste)")
+root.title("Talkie-Putty")
 try:
     root.iconbitmap(default=str(ICON_FILE))  # default= applies to Toplevels too
 except Exception:
     log.warning("could not set window icon from %s", ICON_FILE, exc_info=True)
-root.attributes("-topmost", True)
 
 
 def geometry_on_a_monitor(geo):
@@ -618,6 +630,10 @@ else:
     root.geometry("800x500")  # fall back to primary monitor, default spot
 if saved.get("model") in MODELS:
     requested_model = saved["model"]
+on_top = bool(saved.get("on_top", False))  # default: not always-on-top
+root.attributes("-topmost", on_top)
+# GPU models we've already pulled weights for; first load shows a download window.
+DOWNLOADED_MODELS = set(saved.get("downloaded_models", []))
 
 top = tk.Frame(root)
 top.pack(fill="x", padx=8, pady=(8, 0))
@@ -633,10 +649,7 @@ def on_model_change(_event):
     save_settings()
 
 
-model_box = ttk.Combobox(top, textvariable=model_var, values=list(MODELS),
-                         state="readonly", width=30)
-model_box.bind("<<ComboboxSelected>>", on_model_change)
-model_box.pack(side="right")
+# model_box, theme + help buttons are built lower down, in the bottom group bar.
 
 level_bar = tk.Canvas(root, height=10, bg="#ddd", highlightthickness=0)
 level_bar.pack(fill="x", padx=8, pady=(4, 0))
@@ -1082,19 +1095,45 @@ def open_help_dialog():
         pass
 
 
-btn_cut = tk.Button(btns, text="Cut all to clipboard", command=cut_all)
-btn_cut.pack(side="left")
-btn_clear = tk.Button(btns, text="Clear", command=clear_all)
-btn_clear.pack(side="left", padx=8)
-btn_last = tk.Button(btns, text="Clear last sentence", command=clear_last)
-btn_last.pack(side="left")
-btn_vocab = tk.Button(btns, text="Vocabulary…", command=open_vocab_editor)
-btn_vocab.pack(side="left", padx=8)
-btn_repl = tk.Button(btns, text="Replacements…", command=open_replacements_editor)
-btn_repl.pack(side="left")
-hint_label = tk.Label(btns, text="Insert = cut & paste anywhere | Del = clear")
-hint_label.pack(side="right")
+# Bottom bar split into labelled groups that flow onto new rows when narrow.
+grp_model = tk.Frame(btns)
+grp_text = tk.Frame(btns)
+grp_edit = tk.Frame(btns)
+grp_tts = tk.Frame(btns)
+grp_view = tk.Frame(btns)
+group_labels = []
 
+
+def _group_caption(parent, text):
+    lbl = tk.Label(parent, text=text, font=("Segoe UI", 8))
+    lbl.pack(side="left", padx=(0, 6))
+    group_labels.append(lbl)
+
+
+# --- MODEL selector ---
+_group_caption(grp_model, "MODEL")
+model_box = ttk.Combobox(grp_model, textvariable=model_var, values=list(MODELS),
+                         state="readonly", width=30)
+model_box.bind("<<ComboboxSelected>>", on_model_change)
+model_box.pack(side="left")
+
+# --- TEXT actions ---
+_group_caption(grp_text, "TEXT")
+btn_cut = tk.Button(grp_text, text="Cut all to clipboard", command=cut_all)
+btn_cut.pack(side="left")
+btn_clear = tk.Button(grp_text, text="Clear", command=clear_all)
+btn_clear.pack(side="left", padx=(8, 0))
+btn_last = tk.Button(grp_text, text="Clear last sentence", command=clear_last)
+btn_last.pack(side="left", padx=(8, 0))
+
+# --- CUSTOMISE ---
+_group_caption(grp_edit, "CUSTOMISE")
+btn_vocab = tk.Button(grp_edit, text="Vocabulary…", command=open_vocab_editor)
+btn_vocab.pack(side="left")
+btn_repl = tk.Button(grp_edit, text="Replacements…", command=open_replacements_editor)
+btn_repl.pack(side="left", padx=(8, 0))
+
+# --- SPEECH (TTS) ---
 voice_var = tk.StringVar(value=str(saved.get("tts_voice", 0)))
 tts_voice = int(voice_var.get())
 
@@ -1108,13 +1147,6 @@ def on_voice_change(_event):
     text_box.focus_set()
 
 
-voice_box = ttk.Combobox(btns, textvariable=voice_var, state="readonly",
-                         width=5, values=["0"])
-voice_box.bind("<<ComboboxSelected>>", on_voice_change)
-voice_box.pack(side="right", padx=(0, 8))
-voice_label = tk.Label(btns, text="Voice:")
-voice_label.pack(side="right", padx=(0, 2))
-
 tts_speed = float(saved.get("tts_speed", 1.0))
 
 
@@ -1127,19 +1159,74 @@ def on_speed_change(_event):
     text_box.focus_set()
 
 
-speed_scale = tk.Scale(btns, from_=0.6, to=1.6, resolution=0.05,
-                       orient="horizontal", length=110, showvalue=True,
-                       highlightthickness=0, bd=0)
+_group_caption(grp_tts, "SPEECH")
+voice_label = tk.Label(grp_tts, text="Voice:")
+voice_label.pack(side="left", padx=(0, 2))
+voice_box = ttk.Combobox(grp_tts, textvariable=voice_var, state="readonly",
+                         width=5, values=["0"])
+voice_box.bind("<<ComboboxSelected>>", on_voice_change)
+voice_box.pack(side="left", padx=(0, 10))
+speed_label = tk.Label(grp_tts, text="Speed:")
+speed_label.pack(side="left", padx=(0, 2))
+speed_val = tk.Label(grp_tts, text=f"{tts_speed:g}", width=4, anchor="w")
+speed_scale = tk.Scale(grp_tts, from_=0.6, to=1.6, resolution=0.05,
+                       orient="horizontal", length=110, showvalue=False,
+                       highlightthickness=0, bd=0,
+                       command=lambda v: speed_val.configure(text=f"{float(v):g}"))
 speed_scale.set(tts_speed)
 speed_scale.bind("<ButtonRelease-1>", on_speed_change)
-speed_scale.pack(side="right", padx=(0, 12))
-speed_label = tk.Label(btns, text="Speed:")
-speed_label.pack(side="right", padx=(0, 2))
-theme_btn = tk.Button(top, width=3, command=lambda: toggle_theme())
-theme_btn.pack(side="right", padx=(0, 6))
-btn_help = tk.Button(top, text="?", width=3, command=open_help_dialog)
-btn_help.pack(side="right", padx=(0, 6))
-theme_buttons = [btn_cut, btn_clear, btn_last, btn_vocab, btn_repl, btn_help, theme_btn]
+speed_scale.pack(side="left")
+speed_val.pack(side="left", padx=(4, 0))
+
+# Flow layout: place the group frames left-to-right and wrap to a new row when
+# the next group would overflow the width.
+flow_groups = [grp_text, grp_model, grp_edit, grp_tts, grp_view]
+btns.pack_propagate(False)
+btns.configure(height=40)
+_last_flow_w = [0]
+
+
+def reflow_groups(event=None):
+    width = btns.winfo_width()
+    if width <= 1 or width == _last_flow_w[0]:
+        return
+    _last_flow_w[0] = width
+    gap, row_gap = 32, 14
+    x = y = row_h = 0
+    for g in flow_groups:
+        w, h = g.winfo_reqwidth(), g.winfo_reqheight()
+        if x > 0 and x + w > width:
+            x = 0
+            y += row_h + row_gap
+            row_h = 0
+        g.place(x=x, y=y)
+        x += w + gap
+        row_h = max(row_h, h)
+    btns.configure(height=y + row_h)
+
+
+btns.bind("<Configure>", reflow_groups)
+ontop_var = tk.BooleanVar(value=on_top)
+
+
+def toggle_on_top():
+    global on_top
+    on_top = ontop_var.get()
+    root.attributes("-topmost", on_top)
+    text_box.focus_set()
+    save_settings()
+
+
+_group_caption(grp_view, "VIEW")
+chk_ontop = tk.Checkbutton(grp_view, text="On top", variable=ontop_var,
+                           command=toggle_on_top)
+chk_ontop.pack(side="left")
+btn_help = tk.Button(grp_view, text="?", width=3, command=open_help_dialog)
+btn_help.pack(side="left", padx=(8, 0))
+theme_btn = tk.Button(grp_view, width=3, command=lambda: toggle_theme())
+theme_btn.pack(side="left", padx=(8, 0))
+theme_buttons = [btn_cut, btn_clear, btn_last, btn_vocab, btn_repl,
+                 btn_help, theme_btn]
 
 displayed_final_utt = -1
 ignore_before_utt = 0      # whisper results for utterances below this are stale
@@ -1207,13 +1294,17 @@ def set_titlebar_dark(dark):
 def apply_theme():
     c = THEMES[dark_mode]
     root.configure(bg=c["bg"])
-    for w in (top, btns):
+    for w in (top, btns, grp_model, grp_text, grp_edit, grp_tts, grp_view):
         w.configure(bg=c["bg"])
+    for lbl in group_labels:
+        lbl.configure(bg=c["bg"], fg=c["dim"])
     status.configure(bg=c["bg"], fg=c["fg"])
     raw_line.configure(bg=c["bg"], fg=c["dim"])
-    hint_label.configure(bg=c["bg"], fg=c["dim"])
     voice_label.configure(bg=c["bg"], fg=c["dim"])
     speed_label.configure(bg=c["bg"], fg=c["dim"])
+    speed_val.configure(bg=c["bg"], fg=c["fg"])
+    chk_ontop.configure(bg=c["bg"], fg=c["fg"], activebackground=c["bg"],
+                        activeforeground=c["fg"], selectcolor=c["box_bg"])
     speed_scale.configure(bg=c["bg"], fg=c["fg"], troughcolor=c["level_bg"],
                           activebackground=c["btn_active"])
     level_bar.configure(bg=c["level_bg"])
@@ -1434,6 +1525,9 @@ def poll():
                 progress_dialog.progress(*payload)
             elif kind == "dl_close":
                 progress_dialog.close()
+            elif kind == "model_downloaded":
+                DOWNLOADED_MODELS.add(payload)
+                save_settings()
             elif kind == "error_report":
                 status.config(text="error — see log")
                 from tkinter import messagebox
@@ -1522,7 +1616,8 @@ def save_settings():
         SETTINGS_FILE.write_text(json.dumps(
             {"geometry": _last_geometry, "model": requested_model,
              "dark": dark_mode, "tts_voice": tts_voice,
-             "tts_speed": tts_speed}))
+             "tts_speed": tts_speed, "on_top": on_top,
+             "downloaded_models": sorted(DOWNLOADED_MODELS)}))
     except OSError:
         pass
 
@@ -1548,10 +1643,10 @@ def on_close():
 root.protocol("WM_DELETE_WINDOW", on_close)
 keyboard.hook(_global_key_handler, suppress=True)  # dedicated Insert/Delete/Home only
 def first_run_setup():
-    """Download required speech models on first run (blocks with a small splash
-    before the worker threads start). The streaming + default CPU models must be
-    present for the app to function."""
-    if MODEL_DIR.exists() and PARAKEET_DIR.exists():
+    """Download the speech models on first run (blocks with a small splash before
+    the worker threads start): the streaming + default CPU recognisers, plus the
+    Piper voice for text-to-speech."""
+    if MODEL_DIR.exists() and PARAKEET_DIR.exists() and KOKORO_DIR.exists():
         return
     win = tk.Toplevel(root)
     win.title("Talkie-Putty — first-run setup")
@@ -1575,8 +1670,9 @@ def first_run_setup():
     holder = {}
 
     def run():
+        # include_optional pulls the Piper TTS voice too (non-fatal if it fails).
         holder["failures"] = setup_models.ensure_models(
-            DATA_DIR, include_optional=False, progress=progress)
+            DATA_DIR, include_optional=True, progress=progress)
         holder["done"] = True
 
     threading.Thread(target=run, daemon=True).start()

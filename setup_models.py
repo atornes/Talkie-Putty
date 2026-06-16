@@ -31,8 +31,8 @@ MODELS = [
     ("sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
      f"{BASE}/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2",
      True),
-    ("vits-piper-en_US-libritts_r-medium",
-     f"{BASE}/tts-models/vits-piper-en_US-libritts_r-medium.tar.bz2",
+    ("kokoro-int8-multi-lang-v1_1",
+     f"{BASE}/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2",
      False),
 ]
 

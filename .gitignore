@@ -27,3 +27,6 @@ build/
 dist/
 installer-output/
 *.pyc
+
+# Runtime log (dev)
+talkie-putty.log*
